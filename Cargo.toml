@@ -1,0 +1,82 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.96"
+version = "0.1.0"
+publish = false
+
+[workspace.dependencies]
+cs-client = { path = "crates/cs-client" }
+gs-assets = { path = "crates/gs-assets" }
+gs-client = { path = "crates/gs-client" }
+gs-common = { path = "crates/gs-common" }
+gs-console = { path = "crates/gs-console" }
+gs-draw = { path = "crates/gs-draw" }
+gs-effects = { path = "crates/gs-effects" }
+gs-fs = { path = "crates/gs-fs" }
+gs-formats = { path = "crates/gs-formats" }
+gs-net = { path = "crates/gs-net" }
+gs-pmove = { path = "crates/gs-pmove" }
+gs-protocol = { path = "crates/gs-protocol" }
+gs-render = { path = "crates/gs-render" }
+gs-sound = { path = "crates/gs-sound" }
+gs-serverquery = { path = "crates/gs-serverquery" }
+gs-steam = { path = "crates/gs-steam" }
+gs-voicecodec = { path = "crates/gs-voicecodec" }
+gs-studio = { path = "crates/gs-studio" }
+gs-world = { path = "crates/gs-world" }
+gs-vgui = { path = "crates/gs-vgui" }
+gs-gameui = { path = "crates/gs-gameui" }
+gs-hltv = { path = "crates/gs-hltv" }
+
+bytemuck = { version = "1.25", features = ["derive"] }
+bzip2 = "0.6"
+# Builds gs-voicecodec's vendored libopus and SILK SDK.
+cc = "1.11"
+# Links cstrike-game's icon resource into the executable.
+embed-resource = "3.0"
+cpal = "0.17"
+fontdue = "0.9"
+glam = { version = "0.34", features = ["bytemuck"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+libloading = "0.8"
+md-5 = "0.11"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+clap = { version = "4.6", features = ["derive"] }
+log = "0.4"
+env_logger = "0.11"
+pollster = "1.0"
+thiserror = "2.0"
+# NS_MULTICAST needs SO_REUSEADDR before bind.
+socket2 = "0.6"
+anyhow = "1.0"
+wgpu = "30.0"
+winit = "0.30"
+# Layer III only, like Miles' mssmp3.asi.
+nanomp3-core = { version = "0.2", default-features = false, features = ["wide"] }
+ttf-parser = "0.25"
+# sv_downloadurl downloads (the engine's ISteamHTTP requests) and the MOTD browser.
+ureq = "3.1"
+# The MOTD browser's cookie jar (ureq's own sends cookies with their attributes) and links.
+cookie_store = { version = "0.22", default-features = false, features = ["serde_json"] }
+url = "2.5"
+# ISystem::Get/SetClipboardText.
+arboard = { version = "3.6", default-features = false }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

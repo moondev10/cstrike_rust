@@ -1,0 +1,28 @@
+[package]
+name = "gs-client"
+description = "GoldSrc engine client: connection, sign-on, snapshots, command sending"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+gs-assets.workspace = true
+gs-common.workspace = true
+gs-console.workspace = true
+gs-formats.workspace = true
+gs-fs.workspace = true
+gs-hltv.workspace = true
+gs-net.workspace = true
+gs-pmove.workspace = true
+gs-protocol.workspace = true
+gs-studio.workspace = true
+gs-world.workspace = true
+log.workspace = true
+md-5.workspace = true
+thiserror.workspace = true
+ureq.workspace = true
+url.workspace = true
+
+[lints]
+workspace = true

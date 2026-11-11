@@ -1,0 +1,11 @@
+# Rust
+/target/
+/screenshots/
+
+# Valve binaries and derived artifacts: copyrighted, never commit
+/re/bin/
+/re/idb/
+/re/dump/
+
+# Python
+__pycache__/

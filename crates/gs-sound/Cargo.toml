@@ -1,0 +1,17 @@
+[package]
+name = "gs-sound"
+description = "GoldSrc sound system: WAV/sentence loading, channels, software mixer, room DSP, voice, MP3 music, cpal output"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+cpal.workspace = true
+gs-common.workspace = true
+gs-fs.workspace = true
+log.workspace = true
+nanomp3-core.workspace = true
+
+[lints]
+workspace = true

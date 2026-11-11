@@ -1,0 +1,15 @@
+[package]
+name = "gs-hltv"
+description = "Core.dll's HLTV World/Server and DemoPlayer.dll: the viewdemo demo player"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+gs-common.workspace = true
+gs-net.workspace = true
+log.workspace = true
+
+[lints]
+workspace = true

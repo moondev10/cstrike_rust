@@ -1,0 +1,17 @@
+[package]
+name = "gs-steam"
+description = "Steam ticket authentication and voice through the Steamworks flat API, loaded at run time"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+gs-client.workspace = true
+gs-gameui.workspace = true
+gs-sound.workspace = true
+libloading.workspace = true
+log.workspace = true
+
+[lints]
+workspace = true

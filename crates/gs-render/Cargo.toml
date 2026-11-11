@@ -1,0 +1,22 @@
+[package]
+name = "gs-render"
+description = "wgpu renderer for GoldSrc worlds, models and effects"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+bytemuck.workspace = true
+glam.workspace = true
+gs-assets.workspace = true
+gs-draw.workspace = true
+gs-formats.workspace = true
+gs-studio.workspace = true
+gs-world.workspace = true
+log.workspace = true
+thiserror.workspace = true
+wgpu.workspace = true
+
+[lints]
+workspace = true

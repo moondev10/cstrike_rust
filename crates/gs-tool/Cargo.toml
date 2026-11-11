@@ -1,0 +1,22 @@
+[package]
+name = "gs-tool"
+description = "Developer CLI: inspect and validate game content and protocol pieces"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "gstool"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+gs-assets.workspace = true
+gs-formats.workspace = true
+gs-fs.workspace = true
+gs-studio.workspace = true
+
+[lints]
+workspace = true

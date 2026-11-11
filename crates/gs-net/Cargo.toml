@@ -1,0 +1,17 @@
+[package]
+name = "gs-net"
+description = "GoldSrc protocol 48 transport: UDP, split packets, connectionless handshake, netchan, munging"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+bzip2.workspace = true
+gs-common.workspace = true
+log.workspace = true
+socket2.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

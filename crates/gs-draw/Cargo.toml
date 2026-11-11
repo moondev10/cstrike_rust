@@ -1,0 +1,21 @@
+[package]
+name = "gs-draw"
+description = "The engine's 2D API: HUD sprites, fills, VGUI2 scheme fonts, text and localization"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+fontdue.workspace = true
+gs-common.workspace = true
+gs-formats.workspace = true
+log.workspace = true
+ttf-parser.workspace = true
+
+# Tahoma's font links (HKLM FontLink\SystemLink).
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+
+[lints]
+workspace = true

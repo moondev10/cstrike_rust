@@ -1,0 +1,16 @@
+[package]
+name = "gs-effects"
+description = "Engine client effects: temp entities, particles, tracers, beams and effect lights (efx)"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+gs-common.workspace = true
+gs-pmove.workspace = true
+gs-protocol.workspace = true
+log.workspace = true
+
+[lints]
+workspace = true

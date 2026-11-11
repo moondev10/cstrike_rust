@@ -1,0 +1,19 @@
+[package]
+name = "gs-voicecodec"
+description = "Steam-format voice without a Steam client: vendored libopus and SILK SDK, the microphone through cpal"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+cpal.workspace = true
+gs-common.workspace = true
+gs-sound.workspace = true
+log.workspace = true
+
+[build-dependencies]
+cc.workspace = true
+
+[lints]
+workspace = true

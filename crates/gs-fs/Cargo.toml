@@ -1,0 +1,13 @@
+[package]
+name = "gs-fs"
+description = "GoldSrc game filesystem: ordered search paths over game content directories"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[lints]
+workspace = true

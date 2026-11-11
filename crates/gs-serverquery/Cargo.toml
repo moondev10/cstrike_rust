@@ -1,0 +1,15 @@
+[package]
+name = "gs-serverquery"
+description = "The server browser's queries without a Steam client: community master servers, A2S, LAN broadcast, favorites and history"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+gs-gameui.workspace = true
+gs-vgui.workspace = true
+log.workspace = true
+
+[lints]
+workspace = true

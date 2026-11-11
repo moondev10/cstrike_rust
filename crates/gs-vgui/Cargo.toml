@@ -1,0 +1,16 @@
+[package]
+name = "gs-vgui"
+description = "vgui2 (panels, messages, input, schemes, borders) and the vgui_controls library GameUI uses"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+gs-common.workspace = true
+gs-draw.workspace = true
+gs-formats.workspace = true
+log.workspace = true
+
+[lints]
+workspace = true

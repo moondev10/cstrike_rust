@@ -1,0 +1,20 @@
+[package]
+name = "gs-gameui"
+description = "GameUI.dll and the engine's BaseUI: background, game menu, console, loading dialog, dialogs"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+chrono.workspace = true
+gs-common.workspace = true
+gs-console.workspace = true
+gs-formats.workspace = true
+gs-hltv.workspace = true
+gs-vgui.workspace = true
+md-5.workspace = true
+log.workspace = true
+
+[lints]
+workspace = true

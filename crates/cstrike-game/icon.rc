@@ -1,0 +1,2 @@
+// Resource 1: the executable's icon, which the window loads too (`video::with_app_icon`).
+1 ICON "icon.ico"
