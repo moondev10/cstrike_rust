@@ -177,7 +177,7 @@ impl Video {
     }
 }
 
-/// The window's icons from the executable's icon resource 1 (`icon.rc`: the CS 1.6 icon with the
+/// The window's icons from the executable's icon resource 1 (`icon.rc`: a reticle with the
 /// Rust logo), where the engine sets the mod's `game.tga` after `SDL_CreateWindow`
 /// (deviations.md). The process is DPI-unaware: the caption takes 16×16, the taskbar the
 /// system's default size.

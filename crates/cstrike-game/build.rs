@@ -3,7 +3,7 @@
 //! build); Windows gives an executable 1 MiB unless its image asks for more. Elsewhere the main
 //! thread gets the 8 MiB default of `ulimit -s`.
 //!
-//! The executable's icon (`icon.rc`): the CS 1.6 icon with the Rust logo, on Windows targets
+//! The executable's icon (`icon.rc`): a reticle with the Rust logo, on Windows targets
 //! (embed-resource goes by the host, so a cross build for Linux would link a Windows resource).
 fn main() -> Result<(), embed_resource::CompilationResult> {
     println!("cargo:rerun-if-changed=icon.rc");
