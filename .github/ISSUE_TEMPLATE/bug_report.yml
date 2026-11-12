@@ -1,0 +1,47 @@
+name: Bug report
+description: The client behaves differently from the original, crashes, or cannot connect.
+labels: [bug]
+body:
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happens
+      description: What this client does.
+    validations:
+      required: true
+  - type: textarea
+    id: original
+    attributes:
+      label: What the original client does
+      description: The same scene in the Steam client (HL25). Screenshots or a demo help.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Connect to 1.2.3.4:27015 (server plugins: ...)
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: Output of `git rev-parse --short HEAD`.
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System
+      placeholder: Windows 11, RTX 4070, Direct3D 12
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Output of `RUST_LOG=debug cstrike-game play ...` around the problem.
+      render: text

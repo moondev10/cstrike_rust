@@ -1,0 +1,18 @@
+name: Missing feature
+description: Something the original client has that this one lacks.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: original
+    attributes:
+      label: What the original client does
+      description: The command, cvar, menu or behaviour, and how it works there.
+    validations:
+      required: true
+  - type: textarea
+    id: needed
+    attributes:
+      label: Where it matters
+      description: The server, plugin, map or workflow that needs it.
+    validations:
+      required: true
