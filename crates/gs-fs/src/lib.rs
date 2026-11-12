@@ -26,12 +26,21 @@ pub enum FsError {
 pub const BASEDIR_ENV: &str = "GS_BASEDIR";
 const STEAM_DEFAULT: &str = "C:/Program Files (x86)/Steam/steamapps/common/Half-Life";
 
-/// Half-Life install directory: `$GS_BASEDIR`, else the default Steam location if present.
+/// Half-Life install directory: `$GS_BASEDIR`, else Steam's default location if present.
 pub fn default_base_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os(BASEDIR_ENV) {
         return Some(PathBuf::from(dir));
     }
-    Some(PathBuf::from(STEAM_DEFAULT)).filter(|p| p.is_dir())
+    steam_defaults().into_iter().find(|p| p.is_dir())
+}
+
+/// Where Steam installs Half-Life: its Windows default, or the Linux Steam roots in `$HOME`.
+fn steam_defaults() -> Vec<PathBuf> {
+    if cfg!(windows) {
+        return vec![PathBuf::from(STEAM_DEFAULT)];
+    }
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return Vec::new() };
+    [".steam/steam", ".local/share/Steam"].iter().map(|root| home.join(root).join("steamapps/common/Half-Life")).collect()
 }
 
 /// Path IDs the engine tags search paths with; reads may be restricted to one ID and writes go

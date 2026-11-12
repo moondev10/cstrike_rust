@@ -42,8 +42,23 @@ fn font_dirs() -> Vec<PathBuf> {
     if let Some(local) = std::env::var_os("LOCALAPPDATA") {
         dirs.push(Path::new(&local).join("Microsoft").join("Windows").join("Fonts"));
     }
-    dirs.push(PathBuf::from("/usr/share/fonts/truetype/msttcorefonts"));
-    dirs.push(PathBuf::from("/usr/share/fonts/TTF"));
+    // Elsewhere the Windows faces the schemes name (Verdana, Tahoma, Marlett, ...) are no system
+    // fonts: a `fonts` directory next to the executable, the user's font directories, and the
+    // msttcorefonts package.
+    if !cfg!(windows) {
+        if let Some(exe_dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)) {
+            dirs.push(exe_dir.join("fonts"));
+        }
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        if let Some(data) = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).or_else(|| home.as_ref().map(|h| h.join(".local").join("share"))) {
+            dirs.push(data.join("fonts"));
+        }
+        if let Some(home) = home {
+            dirs.push(home.join(".fonts"));
+        }
+        dirs.push(PathBuf::from("/usr/share/fonts/truetype/msttcorefonts"));
+        dirs.push(PathBuf::from("/usr/share/fonts/TTF"));
+    }
     dirs
 }
 
