@@ -34,13 +34,17 @@ pub fn default_base_dir() -> Option<PathBuf> {
     steam_defaults().into_iter().find(|p| p.is_dir())
 }
 
-/// Where Steam installs Half-Life: its Windows default, or the Linux Steam roots in `$HOME`.
+/// Where Steam installs Half-Life: its Windows default, or the Linux and macOS Steam roots in
+/// `$HOME`.
 fn steam_defaults() -> Vec<PathBuf> {
     if cfg!(windows) {
         return vec![PathBuf::from(STEAM_DEFAULT)];
     }
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return Vec::new() };
-    [".steam/steam", ".local/share/Steam"].iter().map(|root| home.join(root).join("steamapps/common/Half-Life")).collect()
+    [".steam/steam", ".local/share/Steam", "Library/Application Support/Steam"]
+        .iter()
+        .map(|root| home.join(root).join("steamapps/common/Half-Life"))
+        .collect()
 }
 
 /// Path IDs the engine tags search paths with; reads may be restricted to one ID and writes go
