@@ -131,12 +131,14 @@ cargo clippy --workspace --all-targets
 - Code comments cite `docs/re/*.md`. These are reverse-engineering notes on the original binaries
   and are not part of this repository.
 
-## Legal
+## License
+
+MIT, see [`LICENSE`](LICENSE). Exceptions:
+- **Bundled third-party code** keeps its own licence:
+  - libopus, BSD licence: `crates/gs-voicecodec/opus/COPYING`;
+  - SILK SDK, Skype licence: `crates/gs-voicecodec/silk/LICENSE`.
+- **The application icon** (`crates/cstrike-game/icon.ico`) is based on the Counter-Strike 1.6
+  icon, which belongs to Valve.
 
 This project is not affiliated with or endorsed by Valve. It contains no game data and no Valve
-binaries; you need your own copy of Counter-Strike 1.6. The application icon is based on the
-Counter-Strike 1.6 icon.
-
-Bundled third-party code:
-- libopus, BSD licence: `crates/gs-voicecodec/opus/COPYING`;
-- SILK SDK, Skype licence: `crates/gs-voicecodec/silk/LICENSE`.
+binaries; you need your own copy of Counter-Strike 1.6.
