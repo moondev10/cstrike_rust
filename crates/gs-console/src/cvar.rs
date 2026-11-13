@@ -48,7 +48,13 @@ pub struct Cvars {
 }
 
 fn stricmp(a: &str, b: &str) -> std::cmp::Ordering {
-    a.bytes().map(|c| c.to_ascii_lowercase()).cmp(b.bytes().map(|c| c.to_ascii_lowercase()))
+    for (x, y) in a.bytes().zip(b.bytes()) {
+        let (x, y) = (x.to_ascii_lowercase(), y.to_ascii_lowercase());
+        if x != y {
+            return x.cmp(&y);
+        }
+    }
+    a.len().cmp(&b.len())
 }
 
 impl Cvars {
@@ -66,7 +72,17 @@ impl Cvars {
 
     /// `Cvar_FindVar`: case-insensitive.
     pub fn find(&self, name: &str) -> Option<&Cvar> {
-        self.list.iter().find(|c| c.name.eq_ignore_ascii_case(name))
+        self.index(name).and_then(|i| self.list.get(i))
+    }
+
+    /// `name`'s position: the list is sorted and unique under `stricmp`, so a binary search
+    /// finds what the original's linear `Q_stricmp` walk does.
+    fn index(&self, name: &str) -> Option<usize> {
+        self.list.binary_search_by(|c| stricmp(&c.name, name)).ok()
+    }
+
+    fn find_mut(&mut self, name: &str) -> Option<&mut Cvar> {
+        self.index(name).and_then(|i| self.list.get_mut(i))
     }
 
     /// `Cvar_VariableString`: `""` when missing.
@@ -86,7 +102,7 @@ impl Cvars {
     /// A cvar's string and value overwritten without any checks (`cmd_serverinfo`'s direct
     /// `cvar_t` write); nothing when the cvar does not exist.
     pub fn set_raw(&mut self, name: &str, value: &str) {
-        if let Some(var) = self.list.iter_mut().find(|c| c.name.eq_ignore_ascii_case(name)) {
+        if let Some(var) = self.find_mut(name) {
             var.string = value.to_owned();
             var.value = q_atof(value);
         }
@@ -96,7 +112,7 @@ impl Cvars {
     /// NOBADPATHS, PRINTABLEONLY, NOEXTRAWHITESPACE and FILTERCHARS in that order, then the
     /// store and `value = Q_atof(string)`.
     pub fn direct_set(&mut self, name: &str, value: &str) -> SetResult {
-        let Some(var) = self.list.iter_mut().find(|c| c.name.eq_ignore_ascii_case(name)) else {
+        let Some(var) = self.find_mut(name) else {
             return SetResult::Missing;
         };
         if var.flags & flags::NOBADPATHS != 0
@@ -125,7 +141,7 @@ impl Cvars {
     /// `var.value = v` written straight into the `cvar_t` (`svc_timescale`, `net_scale`'s
     /// clamp): the string keeps its old text.
     pub fn set_value_only(&mut self, name: &str, v: f32) {
-        if let Some(var) = self.list.iter_mut().find(|c| c.name.eq_ignore_ascii_case(name)) {
+        if let Some(var) = self.find_mut(name) {
             var.value = v;
         }
     }

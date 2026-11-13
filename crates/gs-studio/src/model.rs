@@ -343,13 +343,17 @@ impl StudioModel {
 
     /// `R_StudioSetupModel`: the submodel `body` selects in a bodypart.
     pub fn submodel(&self, bodypart: usize, body: i32) -> Option<&SubModel> {
+        self.bodyparts.get(bodypart)?.models.get(self.submodel_index(bodypart, body)?)
+    }
+
+    /// [`Self::submodel`]'s index in the bodypart's model list.
+    pub fn submodel_index(&self, bodypart: usize, body: i32) -> Option<usize> {
         let part = self.bodyparts.get(bodypart)?;
         if part.models.is_empty() {
             return None;
         }
         let base = part.base.max(1);
-        let index = (body / base).rem_euclid(part.models.len() as i32) as usize;
-        part.models.get(index)
+        Some((body / base).rem_euclid(part.models.len() as i32) as usize)
     }
 }
 

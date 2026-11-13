@@ -116,6 +116,8 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Uniform slots for brush models drawn in one frame (slot 0 is the world).
 const MAX_BRUSH_INSTANCES: usize = 1024;
 const MODEL_SLOT: u64 = 256;
+/// Staging belt chunk size: a busy frame's vertices fit a few chunks.
+const BELT_CHUNK: u64 = 4 << 20;
 
 /// `kRender*` entity render modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -366,6 +368,7 @@ struct StudioPass {
     models: Vec<StudioGpu>,
     sprites: Vec<SpriteGpu>,
     vertices: Option<wgpu::Buffer>,
+    indices: Option<wgpu::Buffer>,
 }
 
 pub struct Renderer {
@@ -413,6 +416,13 @@ pub struct Renderer {
     decal_vertices: Option<wgpu::Buffer>,
     /// `(brush model, decal texture, vertex range)` in draw order.
     decal_draws: Vec<(usize, usize, std::ops::Range<u32>)>,
+    /// The frame's model, sprite and effect geometry, kept between frames with its grown
+    /// capacity (rebuilt each frame).
+    frame_geometry: crate::studio::Geometry,
+    draw_scratch: crate::studio::DrawScratch,
+    /// Mapped chunks the frame's buffer writes are staged in and copied from, reused from frame
+    /// to frame (`Queue::write_buffer` allocates a staging buffer for every call).
+    belt: wgpu::util::StagingBelt,
 }
 
 impl Renderer {
@@ -592,6 +602,7 @@ impl Renderer {
             models: Vec::new(),
             sprites: Vec::new(),
             vertices: None,
+            indices: None,
         };
 
         let mut renderer = Self {
@@ -626,6 +637,9 @@ impl Renderer {
             decals: Decals::default(),
             decal_vertices: None,
             decal_draws: Vec::new(),
+            frame_geometry: crate::studio::Geometry::default(),
+            draw_scratch: crate::studio::DrawScratch::default(),
+            belt: wgpu::util::StagingBelt::new(device.clone(), BELT_CHUNK),
         };
         renderer.particle_material = Some(renderer.material("particletexture", 8, 8, &particle_texture(), false));
         renderer.warm_studio_pipelines();
@@ -783,7 +797,7 @@ impl Renderer {
             textures.push((tex.width, tex.height, tex.flags));
         }
         let handle = StudioHandle(self.studio.models.len() as u32);
-        self.studio.models.push(StudioGpu { source: StudioSource { model, textures }, materials });
+        self.studio.models.push(StudioGpu { source: StudioSource::new(model, textures), materials });
         handle
     }
 
@@ -1302,7 +1316,9 @@ impl Renderer {
                 fog,
             }));
         }
-        self.queue.write_buffer(&self.frame_buffer, 0, &frames);
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+        let mut upload = Upload { belt: &mut self.belt, encoder: &mut encoder };
+        upload.write(&self.frame_buffer, 0, &frames);
 
         let center = |b: &BrushInstance| {
             self.world.as_ref().and_then(|w| w.bsp.models.get(b.model)).map_or(b.origin, |m| {
@@ -1328,14 +1344,15 @@ impl Renderer {
 
         let (forward, right, up) = camera::angle_vectors(view.angles);
         let chrome = ChromeView { origin: view.origin.to_array(), right: right.to_array() };
-        let mut vertices: Vec<StudioVertex> = Vec::new();
+        let mut geo = std::mem::take(&mut self.frame_geometry);
+        geo.clear();
         let mut studio_meshes: Vec<Vec<MeshDraw>> = Vec::with_capacity(studios.len());
         let mut opaque_studios = Vec::new();
         let mut view_models = Vec::new();
         for (i, d) in studios.iter().enumerate() {
             let mut meshes = Vec::new();
             if let Some(m) = self.studio.models.get(d.model.0 as usize) {
-                crate::studio::build_draw(&m.source, d, &self.gamma, &chrome, &mut vertices, &mut meshes);
+                crate::studio::build_draw(&m.source, d, &self.gamma, &chrome, &mut geo, &mut meshes, &mut self.draw_scratch);
             }
             studio_meshes.push(meshes);
             if d.view_model {
@@ -1352,7 +1369,7 @@ impl Renderer {
         for (i, d) in sprites.iter().enumerate() {
             let mut meshes = Vec::new();
             if let Some(source) = self.studio.sprites.get(d.sprite.0 as usize).and_then(|s| s.source.as_ref()) {
-                crate::sprite::build_sprite(source, d, &sprite_view, &mut vertices, &mut meshes);
+                crate::sprite::build_sprite(source, d, &sprite_view, &mut geo, &mut meshes);
             }
             sprite_meshes.push(meshes);
             if d.rendermode == RenderMode::Normal {
@@ -1362,17 +1379,18 @@ impl Renderer {
             }
         }
         translucent.sort_by(|a, b| b.0.total_cmp(&a.0));
-        let particle_range = append_range(&mut vertices, &scene.particles);
-        let shadow_ranges: Vec<std::ops::Range<u32>> = scene.shadows.iter().map(|e| append_range(&mut vertices, &e.vertices)).collect();
-        let transparent_ranges: Vec<std::ops::Range<u32>> = scene.transparent.iter().map(|e| append_range(&mut vertices, &e.vertices)).collect();
-        let effect_ranges: Vec<std::ops::Range<u32>> = scene.effects.iter().map(|e| append_range(&mut vertices, &e.vertices)).collect();
-        let normal_ranges: Vec<std::ops::Range<u32>> = scene.normal.iter().map(|e| append_range(&mut vertices, &e.vertices)).collect();
+        let particle_range = append_range(&mut geo.vertices, &scene.particles);
+        let shadow_ranges: Vec<std::ops::Range<u32>> = scene.shadows.iter().map(|e| append_range(&mut geo.vertices, &e.vertices)).collect();
+        let transparent_ranges: Vec<std::ops::Range<u32>> = scene.transparent.iter().map(|e| append_range(&mut geo.vertices, &e.vertices)).collect();
+        let effect_ranges: Vec<std::ops::Range<u32>> = scene.effects.iter().map(|e| append_range(&mut geo.vertices, &e.vertices)).collect();
+        let normal_ranges: Vec<std::ops::Range<u32>> = scene.normal.iter().map(|e| append_range(&mut geo.vertices, &e.vertices)).collect();
         let mesh_keys = studio_meshes.iter().chain(&sprite_meshes).flatten().map(|m| m.key);
         let effect_keys = scene.shadows.iter().chain(&scene.transparent).chain(&scene.effects).chain(&scene.normal).map(|e| effect_key(e.blend));
         for key in mesh_keys.chain([PARTICLE_KEY]).chain(effect_keys).collect::<Vec<_>>() {
             self.studio_pipeline(key);
         }
-        self.upload_studio_vertices(&vertices);
+        self.upload_geometry(&mut encoder, &geo);
+        self.frame_geometry = geo;
 
         let world_slot = ModelUniform { transform: Mat4::IDENTITY.to_cols_array_2d(), blend: [1.0; 4], color: [1.0; 4] };
         let mut uniforms = slot_bytes(&world_slot);
@@ -1384,10 +1402,9 @@ impl Renderer {
                 color: [c[0], c[1], c[2], 1.0],
             }));
         }
-        self.queue.write_buffer(&self.model_buffer, 0, &uniforms);
-        let overlay_runs = overlay.map(|cmds| self.overlay.prepare(&self.device, &self.queue, size, cmds));
-
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+        let mut upload = Upload { belt: &mut self.belt, encoder: &mut encoder };
+        upload.write(&self.model_buffer, 0, &uniforms);
+        let overlay_runs = overlay.map(|cmds| self.overlay.prepare(&self.device, &mut upload, size, cmds));
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("world"),
@@ -1481,25 +1498,34 @@ impl Renderer {
                 });
             }
         }
+        self.belt.finish();
         self.queue.submit([encoder.finish()]);
+        self.belt.recall();
     }
 
-    fn upload_studio_vertices(&mut self, vertices: &[StudioVertex]) {
-        if vertices.is_empty() {
-            return;
-        }
-        let bytes: &[u8] = bytemuck::cast_slice(vertices);
-        let needed = bytes.len() as u64;
-        if self.studio.vertices.as_ref().is_none_or(|b| b.size() < needed) {
-            self.studio.vertices = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("studio vertices"),
-                size: needed.next_power_of_two(),
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }));
-        }
-        if let Some(buffer) = &self.studio.vertices {
-            self.queue.write_buffer(buffer, 0, bytes);
+    /// The frame's model, sprite and effect geometry into the studio vertex and index buffers
+    /// (grown to the next power of two when short).
+    fn upload_geometry(&mut self, encoder: &mut wgpu::CommandEncoder, geo: &crate::studio::Geometry) {
+        let mut upload = Upload { belt: &mut self.belt, encoder };
+        for (slot, bytes, usage, label) in [
+            (&mut self.studio.vertices, bytemuck::cast_slice::<_, u8>(&geo.vertices), wgpu::BufferUsages::VERTEX, "studio vertices"),
+            (&mut self.studio.indices, bytemuck::cast_slice::<_, u8>(&geo.indices), wgpu::BufferUsages::INDEX, "studio indices"),
+        ] {
+            if bytes.is_empty() {
+                continue;
+            }
+            let needed = bytes.len() as u64;
+            if slot.as_ref().is_none_or(|b| b.size() < needed) {
+                *slot = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: needed.next_power_of_two(),
+                    usage: usage | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            }
+            if let Some(buffer) = slot.as_ref() {
+                upload.write(buffer, 0, bytes);
+            }
         }
     }
 
@@ -1555,11 +1581,13 @@ impl Renderer {
                 self.draw_decals(pass, b.model);
             }
             Item::Studio(i) => {
-                let (Some(buffer), Some(model)) = (&self.studio.vertices, self.studio.models.get(d.studios[i].model.0 as usize))
+                let (Some(buffer), Some(indices), Some(model)) =
+                    (&self.studio.vertices, &self.studio.indices, self.studio.models.get(d.studios[i].model.0 as usize))
                 else {
                     return;
                 };
                 pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
                 for mesh in &d.studio_meshes[i] {
                     let material = match mesh.sprite {
                         Some(sprite) => self.studio.sprites.get(sprite.0 as usize).and_then(|s| s.frames.get(mesh.texture as usize)).and_then(Option::as_ref),
@@ -1570,15 +1598,17 @@ impl Renderer {
                     };
                     pass.set_pipeline(pipeline);
                     self.bind(pass, material);
-                    pass.draw(mesh.vertices.clone(), 0..1);
+                    pass.draw_indexed(mesh.indices.clone(), 0, 0..1);
                 }
             }
             Item::Sprite(i) => {
-                let (Some(buffer), Some(sprite)) = (&self.studio.vertices, self.studio.sprites.get(d.sprites[i].sprite.0 as usize))
+                let (Some(buffer), Some(indices), Some(sprite)) =
+                    (&self.studio.vertices, &self.studio.indices, self.studio.sprites.get(d.sprites[i].sprite.0 as usize))
                 else {
                     return;
                 };
                 pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
                 for mesh in &d.sprite_meshes[i] {
                     let (Some(pipeline), Some(Some(material))) =
                         (self.studio.pipelines.get(&mesh.key), sprite.frames.get(mesh.texture as usize))
@@ -1587,7 +1617,7 @@ impl Renderer {
                     };
                     pass.set_pipeline(pipeline);
                     self.bind(pass, material);
-                    pass.draw(mesh.vertices.clone(), 0..1);
+                    pass.draw_indexed(mesh.indices.clone(), 0, 0..1);
                 }
             }
         }
@@ -1626,6 +1656,22 @@ fn append_range(vertices: &mut Vec<StudioVertex>, src: &[StudioVertex]) -> std::
     let start = vertices.len() as u32;
     vertices.extend_from_slice(src);
     start..vertices.len() as u32
+}
+
+/// A frame's buffer writes, staged in the belt and copied in the frame's encoder before its
+/// passes.
+pub(crate) struct Upload<'a> {
+    pub(crate) belt: &'a mut wgpu::util::StagingBelt,
+    pub(crate) encoder: &'a mut wgpu::CommandEncoder,
+}
+
+impl Upload<'_> {
+    /// Copies `bytes` (a multiple of 4 long) into `buffer` at `offset`.
+    pub(crate) fn write(&mut self, buffer: &wgpu::Buffer, offset: u64, bytes: &[u8]) {
+        if let Some(size) = wgpu::BufferSize::new(bytes.len() as u64) {
+            self.belt.write_buffer(self.encoder, buffer, offset, size).copy_from_slice(bytes);
+        }
+    }
 }
 
 /// `r_notexture_mip`: 16x16 black/magenta checkerboard of 8x8 quadrants.

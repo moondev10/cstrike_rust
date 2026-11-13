@@ -7,7 +7,7 @@ use gs_formats::sprite::{Sprite, SpriteFormat, SpriteFrame, SpriteType};
 
 use crate::gamma::GammaTables;
 use crate::renderer::RenderMode;
-use crate::studio::{AlphaTest, Blend, MeshDraw, PipelineKey, StudioVertex, TexEnv};
+use crate::studio::{AlphaTest, Blend, Geometry, MeshDraw, PipelineKey, StudioVertex, TexEnv};
 use crate::texture;
 
 /// Handle of an uploaded sprite.
@@ -119,7 +119,7 @@ pub(crate) fn key(mode: RenderMode) -> PipelineKey {
 }
 
 /// `R_DrawSpriteModel`: one quad (nothing for group frames or degenerate upright axes).
-pub(crate) fn build_sprite(src: &SpriteSource, draw: &SpriteDraw, view: &SpriteView, out: &mut Vec<StudioVertex>, meshes: &mut Vec<MeshDraw>) {
+pub(crate) fn build_sprite(src: &SpriteSource, draw: &SpriteDraw, view: &SpriteView, geo: &mut Geometry, meshes: &mut Vec<MeshDraw>) {
     let sprite = &src.sprite;
     let mut index = draw.frame as i32;
     if index < 0 || index as usize >= sprite.frames.len() {
@@ -146,7 +146,9 @@ pub(crate) fn build_sprite(src: &SpriteSource, draw: &SpriteDraw, view: &SpriteV
         v(point(frame.up, frame.right), [1.0, 0.0]),
         v(point(frame.down, frame.right), [1.0, 1.0]),
     ];
-    let first = out.len() as u32;
-    out.extend([quad[0], quad[1], quad[2], quad[0], quad[2], quad[3]]);
-    meshes.push(MeshDraw { vertices: first..out.len() as u32, texture: index as u32, key: key(draw.rendermode), sprite: None });
+    let base = geo.vertices.len() as u32;
+    let first = geo.index_count();
+    geo.vertices.extend(quad);
+    geo.indices.extend([0, 1, 2, 0, 2, 3].map(|k| base + k));
+    meshes.push(MeshDraw { indices: first..geo.index_count(), texture: index as u32, key: key(draw.rendermode), sprite: None });
 }

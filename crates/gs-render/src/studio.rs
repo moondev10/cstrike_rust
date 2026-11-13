@@ -7,7 +7,7 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 use gs_studio::StudioModel;
 use gs_studio::anim::{Mat3x4, irotate};
-use gs_studio::model::texture_flags;
+use gs_studio::model::{SubModel, texture_flags};
 use gs_world::World;
 
 use crate::camera::NUM_LIGHTSTYLES;
@@ -325,12 +325,32 @@ pub(crate) fn chrome_key(flags: i32, mirrored: bool) -> PipelineKey {
 /// A contiguous run of triangles with one texture and GL state.
 #[derive(Debug, Clone)]
 pub struct MeshDraw {
-    pub vertices: std::ops::Range<u32>,
+    /// Range of [`Geometry::indices`].
+    pub indices: std::ops::Range<u32>,
     /// Studio texture index, or the frame of `sprite`.
     pub texture: u32,
     pub key: PipelineKey,
     /// A sprite texture bound instead of the model's own (glow shell chrome).
     pub sprite: Option<SpriteHandle>,
+}
+
+/// A frame's CPU-built model and sprite geometry: shared vertices (strip and fan vertices
+/// stored once) and the triangle-list indices the [`MeshDraw`]s draw.
+#[derive(Default)]
+pub(crate) struct Geometry {
+    pub(crate) vertices: Vec<StudioVertex>,
+    pub(crate) indices: Vec<u32>,
+}
+
+impl Geometry {
+    pub(crate) fn clear(&mut self) {
+        self.vertices.clear();
+        self.indices.clear();
+    }
+
+    pub(crate) fn index_count(&self) -> u32 {
+        self.indices.len() as u32
+    }
 }
 
 /// View inputs for chrome.
@@ -344,16 +364,125 @@ pub(crate) struct StudioSource {
     pub model: Arc<StudioModel>,
     /// `(width, height, flags)` per texture.
     pub textures: Vec<(u32, u32, i32)>,
+    /// Per bodypart, per submodel.
+    topology: Vec<Vec<SubmodelTopology>>,
 }
 
-/// `R_StudioDrawPoints` for every bodypart of `draw`, appending triangles to `out`.
+impl StudioSource {
+    pub(crate) fn new(model: Arc<StudioModel>, textures: Vec<(u32, u32, i32)>) -> Self {
+        let topology = model.bodyparts.iter().map(|part| part.models.iter().map(SubmodelTopology::new).collect()).collect();
+        Self { model, textures, topology }
+    }
+
+    /// The submodel `body` selects in bodypart `part`, with its topology.
+    fn submodel(&self, part: usize, body: i32) -> Option<(&SubModel, &SubmodelTopology)> {
+        let index = self.model.submodel_index(part, body)?;
+        Some((self.model.bodyparts.get(part)?.models.get(index)?, self.topology.get(part)?.get(index)?))
+    }
+}
+
+/// A tricmd vertex: `(vertindex, normindex, s, t)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct Corner {
+    vert: u32,
+    norm: u32,
+    s: i16,
+    t: i16,
+}
+
+/// A submodel's tricmds prepared once per model. Per mesh: the corners its strips and fans draw
+/// (the valid prefix of each, as `R_StudioDrawPoints` stops a strip at a bad index), each once,
+/// and the triangle list over them in drawing order. A corner's vertex is the same wherever it
+/// recurs in the mesh, so a frame computes it once.
+#[derive(Debug, Default)]
+struct SubmodelTopology {
+    meshes: Vec<MeshTopology>,
+    /// The glow shell's push: the first normal each vertex is drawn with.
+    first_normal: Vec<Option<usize>>,
+}
+
+#[derive(Debug, Default)]
+struct MeshTopology {
+    corners: Vec<Corner>,
+    /// Indices into `corners`.
+    triangles: Vec<u32>,
+    /// The glow shell's vertices depend on the vertex index alone: the indices used, and the
+    /// triangles over them.
+    shell_verts: Vec<u32>,
+    shell_triangles: Vec<u32>,
+}
+
+impl SubmodelTopology {
+    fn new(sub: &SubModel) -> Self {
+        let mut first_normal = vec![None; sub.verts.len()];
+        for v in sub.meshes.iter().flat_map(|m| &m.cmds).flat_map(|c| &c.verts) {
+            if let (Ok(vi), Ok(ni)) = (usize::try_from(v[0]), usize::try_from(v[1]))
+                && let Some(slot @ None) = first_normal.get_mut(vi)
+            {
+                *slot = Some(ni);
+            }
+        }
+        let count = sub.norms.len().min(MAX_STUDIO_VERTS);
+        let mut strip = Vec::new();
+        let meshes = sub
+            .meshes
+            .iter()
+            .map(|mesh| {
+                let mut topo = MeshTopology::default();
+                let (mut corner_ids, mut vert_ids) = (std::collections::HashMap::new(), std::collections::HashMap::new());
+                for cmd in &mesh.cmds {
+                    strip.clear();
+                    strip.extend(cmd.verts.iter().map_while(|v| {
+                        let (vi, ni) = (usize::try_from(v[0]).ok()?, usize::try_from(v[1]).ok()?);
+                        (ni < count && vi < sub.verts.len()).then_some(Corner { vert: vi as u32, norm: ni as u32, s: v[2], t: v[3] })
+                    }));
+                    for i in 2..strip.len() {
+                        for k in corners(cmd.fan, i) {
+                            let c = strip[k];
+                            let id = *corner_ids.entry(c).or_insert_with(|| {
+                                topo.corners.push(c);
+                                topo.corners.len() as u32 - 1
+                            });
+                            topo.triangles.push(id);
+                            let id = *vert_ids.entry(c.vert).or_insert_with(|| {
+                                topo.shell_verts.push(c.vert);
+                                topo.shell_verts.len() as u32 - 1
+                            });
+                            topo.shell_triangles.push(id);
+                        }
+                    }
+                }
+                topo
+            })
+            .collect();
+        Self { meshes, first_normal }
+    }
+}
+
+/// [`build_draw`]'s per-model temporaries, kept from call to call (and frame to frame) so
+/// drawing a model allocates nothing once they have grown.
+#[derive(Default)]
+pub(crate) struct DrawScratch {
+    blightvec: Vec<[f32; 3]>,
+    chrome_up: Vec<[f32; 3]>,
+    chrome_right: Vec<[f32; 3]>,
+    /// Local lights' positions in each bone's space, bone by bone.
+    light_bone_pos: Vec<[f32; 3]>,
+    xform: Vec<[f32; 3]>,
+    light_values: Vec<[f32; 3]>,
+    chrome: Vec<[i32; 2]>,
+    strip: Vec<StudioVertex>,
+}
+
+/// `R_StudioDrawPoints` for every bodypart of `draw`, appending triangles to `geo`.
 pub(crate) fn build_draw(
     src: &StudioSource,
     draw: &StudioDraw,
     gamma: &GammaTables,
     chrome_view: &ChromeView,
-    out: &mut Vec<StudioVertex>,
+    geo: &mut Geometry,
     meshes: &mut Vec<MeshDraw>,
+    scratch: &mut DrawScratch,
 ) {
     let model = &src.model;
     let bones = &draw.bones;
@@ -364,33 +493,28 @@ pub(crate) fn build_draw(
     let family = usize::try_from(draw.skin).ok().filter(|&s| s != 0 && s < skins.len()).unwrap_or(0);
     let Some(skinref) = skins.get(family) else { return };
 
-    let blightvec: Vec<[f32; 3]> = bones.iter().map(|m| irotate(m, draw.light.dir)).collect();
-    let (chrome_up, chrome_right) = chrome_vectors(bones, chrome_view.origin, chrome_view.right);
+    let DrawScratch { blightvec, chrome_up, chrome_right, light_bone_pos, xform, light_values, chrome, strip, .. } = scratch;
+    blightvec.clear();
+    blightvec.extend(bones.iter().map(|m| irotate(m, draw.light.dir)));
+    chrome_vectors(bones, chrome_view.origin, chrome_view.right, chrome_up, chrome_right);
     // Per-bone local light positions in bone space.
-    let light_bone_pos: Vec<Vec<[f32; 3]>> = bones
-        .iter()
-        .map(|m| {
-            draw.local_lights
-                .iter()
-                .map(|l| irotate(m, [l.origin[0] - m[0][3], l.origin[1] - m[1][3], l.origin[2] - m[2][3]]))
-                .collect()
-        })
-        .collect();
+    let lights = draw.local_lights.len();
+    light_bone_pos.clear();
+    light_bone_pos.extend(bones.iter().flat_map(|m| draw.local_lights.iter().map(move |l| irotate(m, [l.origin[0] - m[0][3], l.origin[1] - m[1][3], l.origin[2] - m[2][3]]))));
 
     let trans_add = draw.rendermode == RenderMode::TransAdd;
     let mut flat = false;
     for part in 0..model.bodyparts.len() {
-        let Some(sub) = model.submodel(part, draw.body) else { continue };
-        let xform: Vec<[f32; 3]> = sub
-            .verts
-            .iter()
-            .zip(&sub.vert_bones)
-            .map(|(v, &b)| gs_studio::anim::transform(&bones[usize::from(b).min(bones.len() - 1)], *v))
-            .collect();
+        let Some((sub, topo)) = src.submodel(part, draw.body) else { continue };
+        xform.clear();
+        xform.extend(sub.verts.iter().zip(&sub.vert_bones).map(|(v, &b)| gs_studio::anim::transform(&bones[usize::from(b).min(bones.len() - 1)], *v)));
 
         // Lighting per normal, mesh by mesh (normals are consumed sequentially).
-        let mut light_values = vec![[0.0f32; 3]; sub.norms.len().min(MAX_STUDIO_VERTS)];
-        let mut chrome = vec![[0i32; 2]; light_values.len()];
+        let count = sub.norms.len().min(MAX_STUDIO_VERTS);
+        light_values.clear();
+        light_values.resize(count, [0.0; 3]);
+        chrome.clear();
+        chrome.resize(count, [0; 2]);
         let mut n = 0usize;
         for mesh in &sub.meshes {
             let flags = mesh_flags(src, skinref, mesh.skinref);
@@ -419,14 +543,14 @@ pub(crate) fn build_draw(
             }
         }
 
-        for mesh in &sub.meshes {
+        for (mesh, mesh_topo) in sub.meshes.iter().zip(&topo.meshes) {
             let flags = mesh_flags(src, skinref, mesh.skinref);
             let tex_index = skinref.get(usize::try_from(mesh.skinref).unwrap_or(usize::MAX)).copied().unwrap_or(0);
             let Some(&(tw, th, _)) = src.textures.get(usize::try_from(tex_index).unwrap_or(usize::MAX)) else { continue };
             let (s_scale, t_scale) = (1.0 / tw.max(1) as f32, 1.0 / th.max(1) as f32);
             let additive = flags & texture_flags::ADDITIVE != 0 && draw.rendermode == RenderMode::Normal;
             let key = mesh_key(draw.rendermode, flags, draw.mirrored);
-            let first = out.len() as u32;
+            let first = geo.index_count();
             let vertex = |vi: usize, ni: usize, s: i16, t: i16| -> StudioVertex {
                 let uv = if flags & texture_flags::CHROME != 0 {
                     let c = chrome[ni];
@@ -443,26 +567,33 @@ pub(crate) fn build_draw(
                         normal[1] = -normal[1];
                     }
                     let bone = usize::from(sub.vert_bones[vi]).min(bones.len() - 1);
-                    light_lambert(gamma, &draw.local_lights, &light_bone_pos[bone], sub.verts[vi], normal, lit)
+                    light_lambert(gamma, &draw.local_lights, &light_bone_pos[bone * lights..(bone + 1) * lights], sub.verts[vi], normal, lit)
                 };
                 StudioVertex { pos: xform[vi], uv, color: [rgb[0], rgb[1], rgb[2], draw.blend] }
             };
-            for cmd in &mesh.cmds {
-                let mut strip: Vec<StudioVertex> = Vec::with_capacity(cmd.verts.len());
-                for v in &cmd.verts {
-                    let (vi, ni) = (usize::try_from(v[0]).unwrap_or(usize::MAX), usize::try_from(v[1]).unwrap_or(usize::MAX));
-                    if ni >= light_values.len() {
-                        break;
+            if flat {
+                // GL_FLAT: a triangle takes its last vertex's colour, so corners are not shared.
+                for cmd in &mesh.cmds {
+                    strip.clear();
+                    for v in &cmd.verts {
+                        let (vi, ni) = (usize::try_from(v[0]).unwrap_or(usize::MAX), usize::try_from(v[1]).unwrap_or(usize::MAX));
+                        if ni >= light_values.len() {
+                            break;
+                        }
+                        if vi >= xform.len() {
+                            break;
+                        }
+                        strip.push(vertex(vi, ni, v[2], v[3]));
                     }
-                    if vi >= xform.len() {
-                        break;
-                    }
-                    strip.push(vertex(vi, ni, v[2], v[3]));
+                    flat_triangles(strip, cmd.fan, geo);
                 }
-                triangulate(&strip, cmd.fan, flat, out);
+            } else {
+                let base = geo.vertices.len() as u32;
+                geo.vertices.extend(mesh_topo.corners.iter().map(|c| vertex(c.vert as usize, c.norm as usize, c.s, c.t)));
+                geo.indices.extend(mesh_topo.triangles.iter().map(|&k| base + k));
             }
-            if out.len() as u32 > first {
-                meshes.push(MeshDraw { vertices: first..out.len() as u32, texture: tex_index as u32, key, sprite: None });
+            if geo.index_count() > first {
+                meshes.push(MeshDraw { indices: first..geo.index_count(), texture: tex_index as u32, key, sprite: None });
             }
             if additive {
                 // Original bug: ShadeModel(GL_FLAT) after an additive mesh sticks for the rest of the model.
@@ -470,120 +601,97 @@ pub(crate) fn build_draw(
             }
         }
     }
-    if let Some(shell) = &draw.shell {
-        build_shell(src, draw, shell, skinref, chrome_view.right, out, meshes);
+    build_shell(src, draw, skinref, chrome_view.right, geo, meshes, scratch);
+}
+
+/// `R_StudioChrome` per bone: chromeup and chromeright in bone space for `origin`, into `up` and
+/// `right`.
+fn chrome_vectors(bones: &[Mat3x4], origin: [f32; 3], vright: [f32; 3], up: &mut Vec<[f32; 3]>, right: &mut Vec<[f32; 3]>) {
+    up.clear();
+    right.clear();
+    for m in bones {
+        let dir = normalize([m[0][3] - origin[0], m[1][3] - origin[1], m[2][3] - origin[2]]);
+        let u = normalize(cross(dir, vright));
+        let r = normalize(cross(u, dir));
+        up.push(irotate(m, u));
+        right.push(irotate(m, r));
     }
 }
 
-/// `R_StudioChrome` per bone: (chromeup, chromeright) in bone space for `origin`.
-fn chrome_vectors(bones: &[Mat3x4], origin: [f32; 3], vright: [f32; 3]) -> (Vec<[f32; 3]>, Vec<[f32; 3]>) {
-    bones
-        .iter()
-        .map(|m| {
-            let dir = normalize([m[0][3] - origin[0], m[1][3] - origin[1], m[2][3] - origin[2]]);
-            let up = normalize(cross(dir, vright));
-            let right = normalize(cross(up, dir));
-            (irotate(m, up), irotate(m, right))
-        })
-        .unzip()
+/// A strip's (or fan's) triangle `i` (≥ 2) as positions in the strip, in GL's vertex order.
+fn corners(fan: bool, i: usize) -> [usize; 3] {
+    if fan {
+        [0, i - 1, i]
+    } else if i.is_multiple_of(2) {
+        [i - 2, i - 1, i]
+    } else {
+        [i - 1, i - 2, i]
+    }
 }
 
-/// Triangles of one tricmd strip or fan; GL_FLAT gives each triangle its last vertex colour.
-fn triangulate(strip: &[StudioVertex], fan: bool, flat: bool, out: &mut Vec<StudioVertex>) {
+/// The GL_FLAT triangles of a tricmd strip or fan: each a copy of its corners in the last one's
+/// colour.
+fn flat_triangles(strip: &[StudioVertex], fan: bool, geo: &mut Geometry) {
+    let first = geo.vertices.len() as u32;
     for i in 2..strip.len() {
-        let mut tri = if fan {
-            [strip[0], strip[i - 1], strip[i]]
-        } else if i % 2 == 0 {
-            [strip[i - 2], strip[i - 1], strip[i]]
-        } else {
-            [strip[i - 1], strip[i - 2], strip[i]]
-        };
-        if flat {
-            let c = tri[2].color;
-            for v in &mut tri {
-                v.color = c;
-            }
-        }
-        out.extend(tri);
+        let color = strip[i].color;
+        geo.vertices.extend(corners(fan, i).map(|k| StudioVertex { color, ..strip[k] }));
     }
+    geo.indices.extend(first..geo.vertices.len() as u32);
 }
 
-/// The glow shell pass of `R_StudioDrawPoints` (renderfx 19): vertices pushed out along their
-/// first normal, forced chrome UVs from the orbiting shell origin, constant `rendercolor`,
-/// additive without depth write, chrome sprite texture.
+/// The glow shell pass of `R_StudioDrawPoints` (renderfx 19) when `draw` has one: vertices
+/// pushed out along their first normal, forced chrome UVs from the orbiting shell origin,
+/// constant `rendercolor`, additive without depth write, chrome sprite texture.
 fn build_shell(
     src: &StudioSource,
     draw: &StudioDraw,
-    shell: &GlowShell,
     skinref: &[i16],
     vright: [f32; 3],
-    out: &mut Vec<StudioVertex>,
+    geo: &mut Geometry,
     meshes: &mut Vec<MeshDraw>,
+    scratch: &mut DrawScratch,
 ) {
+    let Some(shell) = &draw.shell else { return };
     let model = &src.model;
     let bones = &draw.bones;
     let t = shell.freq * shell.time;
     let origin = [(t.cos() * 4000.0) as f32, (t.sin() * 4000.0) as f32, ((0.33 * t).cos() * 4000.0) as f32];
-    let (chrome_up, chrome_right) = chrome_vectors(bones, origin, vright);
+    let DrawScratch { chrome_up, chrome_right, xform, chrome, .. } = scratch;
+    chrome_vectors(bones, origin, vright, chrome_up, chrome_right);
     let scale = shell.renderamt as f32 * 0.05;
     let color = [f32::from(shell.color[0]) / 255.0, f32::from(shell.color[1]) / 255.0, f32::from(shell.color[2]) / 255.0, 1.0];
     for part in 0..model.bodyparts.len() {
-        let Some(sub) = model.submodel(part, draw.body) else { continue };
-        // The first normal each vertex is drawn with.
-        let mut vert_normal: Vec<Option<usize>> = vec![None; sub.verts.len()];
-        for v in sub.meshes.iter().flat_map(|m| &m.cmds).flat_map(|c| &c.verts) {
-            if let (Ok(vi), Ok(ni)) = (usize::try_from(v[0]), usize::try_from(v[1]))
-                && let Some(slot @ None) = vert_normal.get_mut(vi)
-            {
-                *slot = Some(ni);
-            }
-        }
-        let xform: Vec<[f32; 3]> = sub
-            .verts
-            .iter()
-            .zip(&sub.vert_bones)
-            .zip(&vert_normal)
-            .map(|((v, &b), n)| {
-                let push = n.and_then(|n| sub.norms.get(n)).map_or([0.0; 3], |n| n.map(|c| c * scale));
-                let p = [v[0] + push[0], v[1] + push[1], v[2] + push[2]];
-                gs_studio::anim::transform(&bones[usize::from(b).min(bones.len() - 1)], p)
-            })
-            .collect();
-        let chrome: Vec<[i32; 2]> = sub
-            .norms
-            .iter()
-            .zip(&sub.norm_bones)
-            .take(MAX_STUDIO_VERTS)
-            .map(|(n, &b)| {
-                let bone = usize::from(b).min(bones.len() - 1);
-                [
-                    ((dot(*n, chrome_right[bone]) + 1.0) * 32.0 * 1024.0) as i32,
-                    ((dot(*n, chrome_up[bone]) + 1.0) * 32.0 * 1024.0) as i32,
-                ]
-            })
-            .collect();
-        for mesh in &sub.meshes {
+        let Some((sub, topo)) = src.submodel(part, draw.body) else { continue };
+        let vert_normal = &topo.first_normal;
+        xform.clear();
+        xform.extend(sub.verts.iter().zip(&sub.vert_bones).zip(vert_normal).map(|((v, &b), n)| {
+            let push = n.and_then(|n| sub.norms.get(n)).map_or([0.0; 3], |n| n.map(|c| c * scale));
+            let p = [v[0] + push[0], v[1] + push[1], v[2] + push[2]];
+            gs_studio::anim::transform(&bones[usize::from(b).min(bones.len() - 1)], p)
+        }));
+        chrome.clear();
+        chrome.extend(sub.norms.iter().zip(&sub.norm_bones).take(MAX_STUDIO_VERTS).map(|(n, &b)| {
+            let bone = usize::from(b).min(bones.len() - 1);
+            [((dot(*n, chrome_right[bone]) + 1.0) * 32.0 * 1024.0) as i32, ((dot(*n, chrome_up[bone]) + 1.0) * 32.0 * 1024.0) as i32]
+        }));
+        for (mesh, mesh_topo) in sub.meshes.iter().zip(&topo.meshes) {
             let flags = mesh_flags(src, skinref, mesh.skinref) | texture_flags::CHROME;
             let tex_index = skinref.get(usize::try_from(mesh.skinref).unwrap_or(usize::MAX)).copied().unwrap_or(0);
             let Some(&(tw, th, _)) = src.textures.get(usize::try_from(tex_index).unwrap_or(usize::MAX)) else { continue };
             let (s_scale, t_scale) = (1.0 / tw.max(1) as f32, 1.0 / th.max(1) as f32);
             let key = chrome_key(flags, draw.mirrored);
-            let first = out.len() as u32;
-            for cmd in &mesh.cmds {
-                let mut strip: Vec<StudioVertex> = Vec::with_capacity(cmd.verts.len());
-                for v in &cmd.verts {
-                    let (Ok(vi), Ok(ni)) = (usize::try_from(v[0]), usize::try_from(v[1])) else { break };
-                    if ni >= chrome.len() || vi >= xform.len() {
-                        break;
-                    }
-                    let c = vert_normal[vi].and_then(|n| chrome.get(n)).copied().unwrap_or([0; 2]);
-                    let uv = [c[0] as f32 * s_scale / 1024.0, c[1] as f32 * t_scale / 1024.0];
-                    strip.push(StudioVertex { pos: xform[vi], uv, color });
-                }
-                triangulate(&strip, cmd.fan, false, out);
-            }
-            if out.len() as u32 > first {
-                meshes.push(MeshDraw { vertices: first..out.len() as u32, texture: 0, key, sprite: Some(shell.sprite) });
+            let first = geo.index_count();
+            let base = geo.vertices.len() as u32;
+            geo.vertices.extend(mesh_topo.shell_verts.iter().map(|&vi| {
+                let vi = vi as usize;
+                let c = vert_normal[vi].and_then(|n| chrome.get(n)).copied().unwrap_or([0; 2]);
+                let uv = [c[0] as f32 * s_scale / 1024.0, c[1] as f32 * t_scale / 1024.0];
+                StudioVertex { pos: xform[vi], uv, color }
+            }));
+            geo.indices.extend(mesh_topo.shell_triangles.iter().map(|&k| base + k));
+            if geo.index_count() > first {
+                meshes.push(MeshDraw { indices: first..geo.index_count(), texture: 0, key, sprite: Some(shell.sprite) });
             }
         }
     }

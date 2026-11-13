@@ -213,8 +213,8 @@ impl OverlayPass {
     }
 
     /// Builds and uploads this frame's quads; returns the draw runs.
-    pub(crate) fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, size: (u32, u32), cmds: &[DrawCmd]) -> Vec<Run> {
-        queue.write_buffer(&self.screen_buffer, 0, bytemuck::cast_slice(&[size.0 as f32, size.1 as f32, 0.0, 0.0]));
+    pub(crate) fn prepare(&mut self, device: &wgpu::Device, upload: &mut crate::renderer::Upload, size: (u32, u32), cmds: &[DrawCmd]) -> Vec<Run> {
+        upload.write(&self.screen_buffer, 0, bytemuck::cast_slice(&[size.0 as f32, size.1 as f32, 0.0, 0.0]));
         let mut vertices: Vec<Vertex> = Vec::with_capacity(cmds.len() * 6);
         let mut runs: Vec<Run> = Vec::new();
         for c in cmds {
@@ -247,7 +247,7 @@ impl OverlayPass {
             }));
         }
         if let Some(buffer) = &self.vertices {
-            queue.write_buffer(buffer, 0, bytes);
+            upload.write(buffer, 0, bytes);
         }
         runs
     }
