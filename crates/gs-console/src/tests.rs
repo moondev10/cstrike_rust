@@ -90,6 +90,27 @@ fn wait_defers_the_rest_to_the_next_frame() {
 }
 
 #[test]
+fn server_text_passes_over_hidden_cvars_and_commands_as_unknown_names() {
+    let mut c = Console::new(true);
+    c.register_cvar("viewmodel_fov", "60", cvar_flags::ARCHIVE | cvar_flags::HIDDEN);
+    c.register_command("cs2_menu", cmd_flags::HUD | cmd_flags::HIDDEN);
+    let mut h = connected();
+    // From the server: neither set, read nor run; both go to the server as the original, which
+    // has neither, sends them.
+    c.stuff_text(&mut h, "viewmodel_fov 68\n", StuffPolicy::default());
+    c.execute(&mut h);
+    c.stuff_text(&mut h, "cs2_menu\n", StuffPolicy::default());
+    c.execute(&mut h);
+    assert_eq!(c.cvars.value("viewmodel_fov"), 60.0);
+    assert!(h.commands.is_empty());
+    assert_eq!(h.sent, ["viewmodel_fov 68", "cs2_menu \n"]);
+    // The player's own console has them.
+    run(&mut c, &mut h, "viewmodel_fov 54\ncs2_menu\n");
+    assert_eq!(c.cvars.value("viewmodel_fov"), 54.0);
+    assert_eq!(h.commands, [vec!["cs2_menu".to_owned(), "privileged=true".to_owned()]]);
+}
+
+#[test]
 fn stufftext_runs_one_line_per_frame_without_privileges() {
     let mut c = Console::new(true);
     c.register_cvar("cl_forwardspeed", "400", cvar_flags::ARCHIVE | cvar_flags::CLIENTDLL);

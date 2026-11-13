@@ -29,6 +29,9 @@ pub mod cmd_flags {
     pub const PRIVILEGED: u32 = 0x08;
     /// Blocked from the filtered buffer when `cl_filterstuffcmd > 0`.
     pub const FILTERED: u32 = 0x10;
+    /// Not in the original: a command the original client lacks. Server text passes over it as
+    /// an unknown name, so it goes to the server as the original sends it.
+    pub const HIDDEN: u32 = 0x4000_0000;
 }
 
 /// Name prefixes the filtered buffer may not touch when `cl_filterstuffcmd > 0`.
@@ -431,7 +434,8 @@ impl Console {
         }
         let name = args.arg(0);
         let filter = self.cvars.value("cl_filterstuffcmd") > 0.0;
-        if let Some(cmd) = self.find_command(name).cloned() {
+        // Server text passes over a hidden command as over an unknown name.
+        if let Some(cmd) = self.find_command(name).filter(|c| privileged || c.flags & cmd_flags::HIDDEN == 0).cloned() {
             if !privileged
                 && (cmd.flags & cmd_flags::PRIVILEGED != 0
                     || (filter && (cmd.flags & cmd_flags::FILTERED != 0 || has_filtered_prefix(name))))
@@ -479,11 +483,12 @@ impl Console {
                 .collect();
         if sub.len() > 1 {
             let first = gs_common::bytestr::decode(&sub[0]);
-            let Some(var) = self.cvars.find(&first) else { return false };
+            // Server text passes over a hidden cvar as over an unknown name.
+            let Some(var) = self.cvars.find(&first).filter(|v| privileged || v.flags & cvar_flags::HIDDEN == 0) else { return false };
             host.print(&format!("\"{}\" is \"{}\"\n", var.name, var.string));
             return true;
         }
-        let Some(var) = self.cvars.find(name).cloned() else { return false };
+        let Some(var) = self.cvars.find(name).filter(|v| privileged || v.flags & cvar_flags::HIDDEN == 0).cloned() else { return false };
         if !privileged
             && (var.flags & cvar_flags::PRIVILEGED != 0
                 || (filter && (var.flags & cvar_flags::FILTERSTUFFTEXT != 0 || has_filtered_prefix(&var.name))))

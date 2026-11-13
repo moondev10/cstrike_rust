@@ -19,6 +19,10 @@ pub mod flags {
     pub const FILTERCHARS: u32 = 0x1000;
     /// Values that look like paths outside the game are refused.
     pub const NOBADPATHS: u32 = 0x2000;
+    /// Not in the original: a cvar the original client lacks (`cl_predlog`), which the server
+    /// neither sees nor sets. Its query answers as for no such cvar, and server text passes over
+    /// it as an unknown name.
+    pub const HIDDEN: u32 = 0x4000_0000;
 }
 
 /// `cvar_t`.

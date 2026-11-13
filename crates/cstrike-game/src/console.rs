@@ -84,9 +84,9 @@ pub fn new_console() -> Console {
             console.register_cvar(name, default, f);
         }
     }
-    // Not in the original: the prediction log (docs/deviations.md "Diagnostics"). Privileged,
-    // so no server can switch it on and fill the disk.
-    console.register_cvar("cl_predlog", "0", flags::PRIVILEGED);
+    // Not in the original: the prediction log (docs/deviations.md "Diagnostics"). Hidden from the
+    // server, which neither sees it nor switches it on to fill the disk.
+    console.register_cvar("cl_predlog", "0", flags::HIDDEN);
     let parm = crate::cmdline::check_parm;
     // The engine's startup writes (cvars-engine.md, "Startup writes"): Sys_InitGame/Host_Init
     // (`-dev`, `-console`/`-toconsole`), SV_Init (`sv_lan` on a non-dedicated engine), CL_Init
@@ -251,9 +251,9 @@ pub fn apply_client_cvars(console: &Console, client: &mut Client) {
     client.config.pred_log = v("cl_predlog") != 0.0;
 }
 
-/// `svc_sendcvarvalue(2)`'s answer for `name`.
+/// `svc_sendcvarvalue(2)`'s answer for `name`; a hidden cvar answers as no cvar.
 pub fn cvar_reply(console: &Console, name: &str) -> String {
-    let var = (gs_common::bytestr::encoded_len(name) < 255).then(|| console.cvars.find(name)).flatten();
+    let var = (gs_common::bytestr::encoded_len(name) < 255).then(|| console.cvars.find(name)).flatten().filter(|v| v.flags & flags::HIDDEN == 0);
     match var {
         None => "Bad CVAR request".to_owned(),
         Some(v) if v.flags & flags::PRIVILEGED != 0 => "CVAR is privileged".to_owned(),
@@ -691,6 +691,7 @@ mod tests {
         assert_eq!(cvar_reply(&console, "CL_FORWARDSPEED"), "400");
         assert_eq!(cvar_reply(&console, "cl_filterstuffcmd"), "CVAR is privileged");
         assert_eq!(cvar_reply(&console, "nope"), "Bad CVAR request");
+        assert_eq!(cvar_reply(&console, "cl_predlog"), "Bad CVAR request", "ours, hidden: as in the original, which has none");
         assert_eq!(cvar_reply(&console, &"x".repeat(300)), "Bad CVAR request");
     }
 
