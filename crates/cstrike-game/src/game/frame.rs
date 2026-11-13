@@ -65,8 +65,9 @@ impl Running {
         self.last_loop + Duration::from_secs_f64((due / timescale).max(0.0))
     }
 
-    /// `CL_CreateMove` for this frame into the client's next command.
-    fn create_move(&mut self) {
+    /// `CL_CreateMove` for this frame into the client's next command. The view turns every
+    /// frame; what frames between commands pressed goes into the next command.
+    fn create_move(&mut self, command: CommandFrame) {
         let frame = self.client.protocol().current_frame();
         let cd = &frame.clientdata;
         let playernum = usize::from(self.client.protocol().playernum);
@@ -87,7 +88,8 @@ impl Running {
             cursor_visible: self.vgui_cursor_visible(),
         };
         let mut va = self.angles.to_array();
-        let cmd = self.input.create_move(&params, &mut va);
+        let mut cmd = self.input.create_move(&params, &mut va);
+        self.between.merge(&mut cmd, command.make.is_some());
         self.angles = Vec3::from(va);
         self.client.viewangles = va;
         self.client.next_cmd = cmd;
@@ -165,10 +167,19 @@ impl Running {
         self.drain_module_log();
         self.hud_think();
         self.sync_menu_cursor();
+        // The command this frame makes or the time it waits for (gs_client::cmdclock): in a
+        // game above the classic rate frames share commands; an HLTV camera, moved by the last
+        // command every frame, and the sign-on keep one a frame.
+        let command = if self.client.state() == State::Active && !self.client.spectator() {
+            self.command_clock.frame(dt)
+        } else {
+            self.command_clock.reset();
+            CommandFrame::own(dt)
+        };
         // ClientDLL_CreateMove runs only inside CL_Move from ca_uninitialized on (impulse and
         // weapon select typed before then wait for it).
         if self.client.state() >= State::Uninitialized {
-            self.create_move();
+            self.create_move(command);
         }
         // The client DLL's globals HUD_PostRunCmd reads during this frame's prediction.
         let cd_user1 = self.hud.state.user1;
@@ -187,7 +198,7 @@ impl Running {
         // HUD_TxferPredictionData's source for an HLTV client.
         self.client.hud_users = [self.hud.state.user1, self.hud.state.user2, self.hud.state.user3];
         self.client.filter_stuff_cmd = self.console.cvars.value("cl_filterstuffcmd") > 0.0;
-        self.client.send(t, dt, &mut self.weapons, &mut VoiceSendHost { audio: self.audio.as_mut(), loopback });
+        self.client.send(t, dt, command, &mut self.weapons, &mut VoiceSendHost { audio: self.audio.as_mut(), loopback });
         // ClientDLL_Frame (HUD_Frame → CVoiceStatus::Frame) after CL_Move: what it queues leaves
         // with the next frame's command.
         {
@@ -652,5 +663,35 @@ impl Running {
             frame.scene.studios.len()
         );
         save_png(&image, path)
+    }
+}
+
+/// What frames between commands pressed, for the next command: buttons that were not down in
+/// the last command (a tap between commands still reaches the server), and the impulse and
+/// weapon selection.
+#[derive(Debug, Default, Clone, Copy)]
+pub(super) struct Between {
+    buttons: u16,
+    last_buttons: u16,
+    impulse: u8,
+    weaponselect: u8,
+}
+
+impl Between {
+    /// Adds the presses of the frames since the last command to this frame's `cmd`; the frame
+    /// that `makes` the command starts over.
+    fn merge(&mut self, cmd: &mut gs_protocol::structs::UserCmd, makes: bool) {
+        cmd.buttons |= self.buttons;
+        if cmd.impulse == 0 {
+            cmd.impulse = self.impulse;
+        }
+        if cmd.weaponselect == 0 {
+            cmd.weaponselect = self.weaponselect;
+        }
+        *self = if makes {
+            Between { last_buttons: cmd.buttons, ..Between::default() }
+        } else {
+            Between { buttons: cmd.buttons & !self.last_buttons, impulse: cmd.impulse, weaponselect: cmd.weaponselect, ..*self }
+        };
     }
 }

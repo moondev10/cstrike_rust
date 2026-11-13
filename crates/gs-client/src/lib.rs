@@ -4,6 +4,7 @@
 
 pub mod auth;
 mod client;
+pub mod cmdclock;
 pub mod custom;
 pub mod demo;
 pub mod hpak;
@@ -20,5 +21,6 @@ pub mod viewfx;
 pub mod voice;
 
 pub use client::{Client, ClientConfig, ClientEvent, NetStats, PlayerDecal, State, UiEvent};
+pub use cmdclock::{CommandClock, CommandFrame};
 pub use entities::{ClEntity, LinkKind};
 pub use predict::{LocalState, SimState};

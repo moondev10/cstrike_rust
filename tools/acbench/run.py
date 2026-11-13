@@ -232,6 +232,9 @@ def main():
     ap.add_argument("--addr", default="127.0.0.1:27016")
     ap.add_argument("--seconds", type=int, default=95)
     ap.add_argument("--client", default=os.path.join(ROOT, "target", "debug", "cstrike-game.exe"))
+    # Frames above the classic rate share usercmds (gs_client::cmdclock); P5 checks what the
+    # server gets then.
+    ap.add_argument("--fps-max", type=float, help="run with fps_override 1 and this fps_max")
     args = ap.parse_args()
 
     expected = read_table(os.path.join(ROOT, "re", "dump", "hw_cvars.tsv"), False)
@@ -281,6 +284,8 @@ def main():
     # open for the probe's MOTD), then movement for P5.
     cmd = [args.client, "play", args.addr, "--size", "640x480", "--key", "SPACE:3", "--key", "5:5", "--key", "5:6",
            "--hold", "w:40:52", "--hold", "a:44:48", "--quit-after", str(args.seconds)]
+    if args.fps_max:
+        cmd += ["--cmd=fps_override 1", f"--cmd=fps_max {args.fps_max:g}"]
     try:
         run = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=args.seconds + 60)
         client_out = run.stdout + run.stderr

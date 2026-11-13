@@ -47,7 +47,7 @@ pub fn run(fs: FileSystem, opts: &HeadlessOptions) -> Result<()> {
     while start.elapsed().as_secs_f64() < opts.seconds {
         let now = start.elapsed().as_secs_f64();
         client.check_client_state();
-        client.send(now, now - last, &mut NoWeapons, &mut NoVoice);
+        client.send(now, now - last, gs_client::CommandFrame::own(now - last), &mut NoWeapons, &mut NoVoice);
         client.receive(&mut NoWeapons, &|name| {
             println!("[cvar query] {name}");
             "Bad CVAR request".to_owned()

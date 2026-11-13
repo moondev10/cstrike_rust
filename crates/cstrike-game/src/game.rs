@@ -22,7 +22,7 @@ use glam::Vec3;
 use gs_assets::MapAssets;
 use gs_client::auth::{Authenticator, LanAuthenticator};
 use gs_client::demo::{DemoClientData, DemoInfo, DemoItem, RefParamsRaw};
-use gs_client::{Client, ClientConfig, ClientEvent, LinkKind, State};
+use gs_client::{Client, ClientConfig, ClientEvent, CommandClock, CommandFrame, LinkKind, State};
 use gs_effects::{Effects, ModelKind, ViewParams};
 use gs_fs::{FileSystem, PathId};
 use gs_console::Console;
@@ -268,6 +268,9 @@ struct Running {
     weapons: ClientWeapons,
     /// `v_angles`: the angles of the last rendered view.
     last_view_angles: [f32; 3],
+    /// When frames make user commands, and what frames between them pressed.
+    command_clock: CommandClock,
+    between: frame::Between,
     /// The vgui2 tree with GameUI (`CBaseUI`) and its surface state.
     gameui: gs_gameui::GameUi,
     vgui: gameui_host::SurfaceState,
@@ -655,6 +658,8 @@ impl Game {
             audio,
             weapons: ClientWeapons::new(rng),
             last_view_angles: [0.0; 3],
+            command_clock: CommandClock::default(),
+            between: frame::Between::default(),
             gameui,
             vgui,
             vgui_input: gameui_host::InputState::default(),

@@ -21,6 +21,7 @@ use gs_protocol::{MsgWriter, ProtocolState, ServerMessage};
 use gs_world::World;
 
 use crate::auth::Authenticator;
+use crate::cmdclock::CommandFrame;
 use crate::demo::{Demo, DemoItem};
 use crate::entities::{Entities, LinkContext, LinkKind};
 use crate::events::{EventQueue, FiredEvent};
@@ -335,6 +336,9 @@ pub struct Client {
     /// `cls.nextcmdtime` (a float in the original).
     next_cmd_time: f32,
     msec_carry: f64,
+    /// The newest command slot holds the command in the making (a frame between commands):
+    /// prediction runs it, without its effects, re-predictions included.
+    partial: bool,
     /// `cl_lerp_smoothed`: the interpolation amount sent as `lerp_msec`, slewed toward
     /// `ex_interp` (a float in the original).
     lerp: f32,
@@ -469,6 +473,7 @@ impl Client {
             last_sent_sequence: None,
             next_cmd_time: 0.0,
             msec_carry: 0.0,
+            partial: false,
             lerp: 0.1,
             ex_interp: 0.1,
             next_cmd: UserCmd::default(),
@@ -1058,15 +1063,26 @@ impl Client {
         self.print(text);
     }
 
-    /// A host frame's `CL_Move`: the command for this frame (sent unless held back). `now` is
-    /// the engine clock in seconds; `weapons` is the client DLL's `HUD_PostRunCmd`, `voice` the
-    /// voice engine's send side. The client DLL's `HUD_Frame` runs next, then
-    /// [`Client::receive`].
-    pub fn send(&mut self, now: f64, frametime: f64, weapons: &mut dyn PostRunCmd, voice: &mut dyn VoiceSend) {
+    /// A host frame's `CL_Move`: the command `frame` makes, if any (sent unless held back),
+    /// then the time waiting for the next command, predicted for the view ([`crate::cmdclock`]).
+    /// `now` is the engine clock in seconds, `frametime` the frame's; `weapons` is the client
+    /// DLL's `HUD_PostRunCmd`, `voice` the voice engine's send side. The client DLL's
+    /// `HUD_Frame` runs next, then [`Client::receive`].
+    pub fn send(&mut self, now: f64, frametime: f64, frame: CommandFrame, weapons: &mut dyn PostRunCmd, voice: &mut dyn VoiceSend) {
         self.now = now;
         self.frametime = frametime;
         self.auth.run_frame();
-        self.send_commands(frametime, weapons, voice);
+        self.partial = false;
+        let sequence = self.netchan.as_ref().map(|c| c.outgoing_sequence);
+        if let Some(covered) = frame.make {
+            self.send_commands(covered, weapons, voice);
+        }
+        // The waiting time goes in the next command's slot: not the one just made while it is
+        // still there (a send that took no sequence).
+        let moved_on = frame.make.is_none() || self.netchan.as_ref().map(|c| c.outgoing_sequence) != sequence;
+        if frame.waiting > 0.0 && moved_on {
+            self.predict_partial(frame.waiting, frame.make.is_some(), weapons);
+        }
         self.drain_netchan_prints();
     }
 
@@ -1150,6 +1166,7 @@ impl Client {
         let Some(chan) = self.netchan.as_ref() else { return };
         let maxclients = usize::from(self.proto.maxclients);
         let input = PredictInput {
+            partial: self.partial,
             frame: self.proto.current_frame(),
             entities: &self.entities,
             model_names: &self.level.models,
@@ -1316,6 +1333,7 @@ impl Client {
         }
         let Some(chan) = self.netchan.as_ref() else { return };
         let input = PredictInput {
+            partial: false,
             frame: self.proto.current_frame(),
             entities: &self.entities,
             model_names: &self.level.models,

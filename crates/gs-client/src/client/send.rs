@@ -254,6 +254,28 @@ impl Client {
         }
     }
 
+    /// The time waiting for the next command: the command as it stands, covering the
+    /// `covered` seconds so far, goes in its slot and is predicted without its effects (they
+    /// come with the command), so the view moves at the frame rate. Nothing is sent; the
+    /// command overwrites the slot when it is made. `after_command`: this frame made one, which
+    /// took the impulse and weapon selection, and whose prediction already ran this frame (so
+    /// this one is a re-prediction, as `CL_RedoPrediction`'s).
+    pub(super) fn predict_partial(&mut self, covered: f64, after_command: bool, weapons: &mut dyn PostRunCmd) {
+        if self.state != State::Active || self.demo.playing() || self.passive {
+            return;
+        }
+        let Some(sequence) = self.netchan.as_ref().map(|c| c.outgoing_sequence) else { return };
+        let msec = (covered * 1000.0 + self.msec_carry).clamp(0.0, 255.0) as u8;
+        let mut cmd = UserCmd { msec, lerp_msec: self.cl_cmd.lerp_msec, lightlevel: self.light_level as u8, ..self.next_cmd };
+        if after_command {
+            cmd.impulse = 0;
+            cmd.weaponselect = 0;
+        }
+        self.commands[(sequence & UPDATE_MASK) as usize] = CmdSlot { cmd, senttime: self.now as f32, ..CmdSlot::default() };
+        self.partial = true;
+        self.run_prediction(after_command, weapons);
+    }
+
     /// `Netchan_Transmit`'s last statement: `net_showpackets` other than 0 and 2 prints the
     /// datagram just built (net-transport.md §9.11).
     pub(super) fn trace_outgoing(&mut self, datagram: &[u8]) {

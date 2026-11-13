@@ -178,6 +178,9 @@ pub struct PredictInput<'a> {
     pub ideal_pitch_scale: f32,
     /// `cl_solid_players`: `CL_SetSolidPlayers` returns at once when it is 0.
     pub solid_players: bool,
+    /// The slot after the last command made holds the command in the making (a frame between
+    /// commands, [`crate::cmdclock`]): it runs in re-predictions too, never with its effects.
+    pub partial: bool,
 }
 
 pub struct Prediction {
@@ -500,7 +503,7 @@ impl Prediction {
             Self::solid_players(input, &mut physents);
         }
         let mut pass = Pass { world: &world, physents: &physents, moveents: &moveents, input, events, post, spectator: false, jump: None };
-        let stop = u32::from(!repredicting);
+        let stop = u32::from(!repredicting || input.partial);
         let mut to = from;
         let mut tocmd = fromcmd;
         let mut ran = false;
@@ -510,7 +513,7 @@ impl Prediction {
                 break;
             }
             let slot = (ack.wrapping_add(i) & UPDATE_MASK) as usize;
-            let runfuncs = !repredicting && !commands[slot].processedfuncs;
+            let runfuncs = !repredicting && !input.partial && !commands[slot].processedfuncs;
             let cmd = commands[slot].cmd;
             self.move_trace = self.log.as_mut().map(|l| l.take_trace(slot));
             to = self.run_usercmd(&mut pass, from, &cmd, runfuncs, &mut time, ack.wrapping_add(i));
@@ -520,12 +523,16 @@ impl Prediction {
                     log.cmd(input.realtime, ack.wrapping_add(i), &cmd, &from, &to);
                 }
             }
-            commands[slot].processedfuncs = true;
+            // The pass between commands leaves the effects to the command when it is made.
+            if repredicting || !input.partial {
+                commands[slot].processedfuncs = true;
+            }
             tocmd = commands[slot];
             ran = true;
             self.states[slot] = to;
             self.predicted_origins[slot] = to.player.origin;
-            if commands[slot].senttime >= rt {
+            // The command in the making comes last, after any made this frame (sent now).
+            if !input.partial && commands[slot].senttime >= rt {
                 break;
             }
             from = to;
@@ -542,7 +549,10 @@ impl Prediction {
             to = from;
             tocmd = fromcmd;
         }
-        let f = if tocmd.senttime == fromcmd.senttime {
+        // The view stands at the end of the command in the making: it runs up to now.
+        let f = if input.partial {
+            1.0
+        } else if tocmd.senttime == fromcmd.senttime {
             0.0
         } else {
             f64::from((rt - fromcmd.senttime) / (tocmd.senttime - fromcmd.senttime)).max(0.0) as f32
